@@ -57,9 +57,10 @@ public final class DiscordBot {
     /**
      * Asynchronously creates a Discord voice channel for this group. Calls the callback with the channel ID (or null on failure).
      * @param groupName The name for the new Discord voice channel
+     * @param isPrivate Whether this group should be made private or not (true would be for opted-in password protected groups)
      * @param callback Callback to receive the channel ID (or null)
      */
-    public void createDiscordVoiceChannelAsync(String groupName, java.util.function.Consumer<Long> callback) {
+    public void createDiscordVoiceChannelAsync(String groupName, boolean isPrivate, java.util.function.Consumer<Long> callback) {
         if (freed || ptr == 0) {
             platform.warn("Attempted to create Discord channel after bot was freed or ptr was invalid (vcid=null)");
             callback.accept(null);
@@ -68,7 +69,7 @@ public final class DiscordBot {
         new Thread(() -> {
             try {
                 String initialName = groupName;
-                long channelId = _createDiscordVoiceChannel(ptr, initialName);
+                long channelId = _createDiscordVoiceChannel(ptr, initialName, isPrivate);
                 if (channelId != 0L) {
                     this.discordChannelId = channelId;
                     platform.debug("Created Discord voice channel '" + initialName + "' with vcid=" + channelId);
@@ -178,7 +179,7 @@ public final class DiscordBot {
     private static native void _updateDiscordVoiceChannelName(long ptr, String newName);
 
     // Native methods for channel management
-    private static native long _createDiscordVoiceChannel(long ptr, String groupName);
+    private static native long _createDiscordVoiceChannel(long ptr, String groupName, boolean isPrivate);
     private static native void _deleteDiscordVoiceChannel(long ptr);
     private static native void _setManagedDiscordVoiceChannel(long ptr, long channelId);
 
@@ -530,6 +531,7 @@ public final class DiscordBot {
                     } catch (Throwable e) {
                         platform.error("Failed to stop bot (vcid=" + discordChannelId + "). Check Rust logs for details.", e);
                     }
+                    GroupManager.groupBotMap.values().removeIf(bot -> bot.equals(this));
                     platform.debug("DiscordBot.stop finished for vcid=" + discordChannelId);
                 });
             } else {
@@ -538,6 +540,7 @@ public final class DiscordBot {
                 } catch (Throwable e) {
                     platform.error("Failed to stop bot (vcid=" + discordChannelId + "). Check Rust logs for details.", e);
                 }
+                GroupManager.groupBotMap.values().removeIf(bot -> bot.equals(this));
                 platform.debug("DiscordBot.stop finished for vcid=" + discordChannelId);
             }
         } catch (Throwable e) {

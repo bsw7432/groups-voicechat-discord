@@ -8,7 +8,7 @@ use futures_util::FutureExt;
 use uuid::Uuid;
 use eyre::{Report};
 use parking_lot::{Mutex, RwLock};
-use serenity::all::{ChannelId, GuildId, Http};
+use serenity::all::{ChannelId, GuildId, Http, PermissionOverwrite, PermissionOverwriteType, Permissions};
 use songbird::{
     driver::{
         DecodeMode,
@@ -131,7 +131,7 @@ impl DiscordBot {
     }
 
     /// Asynchronously create a Discord voice channel in the configured category.
-    pub async fn create_voice_channel(&self, http: &Arc<Http>, group_name: &str) -> Result<ChannelId, Report> {
+    pub async fn create_voice_channel(&self, http: &Arc<Http>, group_name: &str, is_private: bool) -> Result<ChannelId, Report> {
         use serenity::all::ChannelType;
         use serenity::builder::CreateChannel as CreateChannelBuilder;
 
@@ -143,10 +143,25 @@ impl DiscordBot {
             None => return Err(eyre::eyre!("Category ID is not a guild channel")),
         };
 
+        // Establish perms for channel if necessary
+        let overwrite = if is_private {
+            // Removes ability for @everyone to speak, read message history, send messages, and connect 
+            Some(
+                PermissionOverwrite{
+                    allow: Permissions::all(),
+                    deny: Permissions::SPEAK | Permissions::CONNECT | Permissions::READ_MESSAGE_HISTORY | Permissions::SEND_MESSAGES,
+                    kind: PermissionOverwriteType::Role(guild_id.everyone_role())
+                }
+            )
+        } else {
+            None
+        };
+
         // Create the voice channel in the category
         let builder = CreateChannelBuilder::new(group_name)
             .kind(ChannelType::Voice)
-            .category(category_id);
+            .category(category_id)
+            .permissions(overwrite);
         let channel = guild_id.create_channel(http.as_ref(), builder).await?;
         let new_channel_id = channel.id;
         info!("Created Discord voice channel '{}' with ID {} in category {}", group_name, new_channel_id, category_id);

@@ -24,6 +24,7 @@ public final class SubCommands {
             .then(literal("reloadconfig").executes(wrapInTry(SubCommands::reloadConfig)))
             .then(literal("restart").executes(wrapInTry(SubCommands::restartBot)))
             .then(literal("stop").executes(wrapInTry(SubCommands::stopBot)))
+            .then(literal("start").executes(wrapInTry(SubCommands::startBot)))
             .then(literal("message")
                 .then(RequiredArgumentBuilder.argument("message", StringArgumentType.greedyString())
                     .executes(wrapInTry(SubCommands::sendMessageToDiscord))
@@ -75,6 +76,10 @@ public final class SubCommands {
             if (groupId != null) break;
         }
         if (groupId == null) {
+            platform.sendMessage(sender, Component.red("Could not determine your group. Perhaps check the console?"));
+            return;
+        }
+        if (GroupManager.privateGroups.containsKey(groupId)) {
             platform.sendMessage(sender, Component.red("You are not in a voicechat group linked to a Discord VC."));
             return;
         }
@@ -127,6 +132,10 @@ public final class SubCommands {
             if (groupId != null) break;
         }
         if (groupId == null) {
+            platform.sendMessage(sender, Component.red("Could not determine your group. Perhaps check the console?"));
+            return;
+        }
+        if (GroupManager.privateGroups.containsKey(groupId)) {
             platform.sendMessage(sender, Component.red("You are not in a voicechat group linked to a Discord VC."));
             return;
         }
@@ -166,6 +175,7 @@ public final class SubCommands {
                 } else {
                     bot.stop(); // Default: deletes the channel
                 }
+                GroupManager.privateGroups.put(groupId, true);
                 platform.sendMessage(sender, Component.green("Successfully stopped the Discord bot for your group."));
             } catch (Throwable e) {
                 platform.error("Failed to stop Discord bot for group: " + finalGroupId, e);
@@ -194,6 +204,10 @@ public final class SubCommands {
             if (groupId != null) break;
         }
         if (groupId == null) {
+            platform.sendMessage(sender, Component.red("Could not determine your group. Perhaps check the console?"));
+            return;
+        }
+        if (GroupManager.privateGroups.containsKey(groupId)) {
             platform.sendMessage(sender, Component.red("You are not in a voicechat group linked to a Discord VC."));
             return;
         }
@@ -232,6 +246,69 @@ public final class SubCommands {
                 platform.sendMessage(sender, Component.red("Failed to restart the Discord bot for your group. See console for details."));
             }
         }, "voicechat-discord: RestartBot").start();
+    }
+
+    // Spins up a Discord VC for the SVC group the player is in. Can be used after dvcgroup stop to add the bot back
+    // to a ephemeral SVC group, and also in password protected SVC groups.
+    // TODO: What happens when you hit start when its still running?
+    private static void startBot(CommandContext<?> sender) {
+        ServerPlayer player = platform.commandContextToPlayer(sender);
+        if (player == null) {
+            platform.sendMessage(sender, Component.red("Could not determine your player. Are you running this from console?"));
+            return;
+        }
+
+        // Find the groupId the player is in
+        UUID groupId = null;
+        for (var entry : GroupManager.groupPlayerMap.entrySet()) {
+            for (var p : entry.getValue()) {
+                if (p.getUuid().equals(player.getUuid())) {
+                    groupId = entry.getKey();
+                    break;
+                }
+            }
+            if (groupId != null) break;
+        }
+
+        if (groupId == null) {
+            platform.sendMessage(sender, Component.red("Could not determine your group. Perhaps check the console?"));
+            return;
+        }
+
+        // Check if user is op/group owner
+        UUID owner = GroupManager.groupOwnerMap.get(groupId);
+        if (!platform.isOperator(sender) && (owner == null || !owner.equals(player.getUuid()))) {
+            platform.sendMessage(sender, Component.red("You must be the group owner to use this command!"));
+            return;
+        }
+    
+        DiscordBot bot = GroupManager.groupBotMap.get(groupId);
+
+        // Group w/ Discord link has no assigned bot. This means
+        // there is no VC, so, we should make one.
+        if (bot == null) {
+            Group group = Core.api.getGroup(groupId);
+            GroupManager.spinUpDiscordLink(group, groupId);
+            return;
+        }
+
+        // Im like 90% certain everything past this point is only possible for the
+        // permalink to hint, but so it goes.
+
+        platform.sendMessage(sender, Component.yellow("Starting Discord bot for your group..."));
+
+        UUID finalGroupId = groupId;
+        new Thread(() -> {
+            try {
+                bot.logIn();
+                bot.start();
+                bot.startDiscordAudioThread(finalGroupId);
+                platform.sendMessage(sender, Component.green("Successfully started the Discord bot for your group."));
+            } catch (Throwable e) {
+                platform.error("Failed to start Discord bot for group: " + finalGroupId, e);
+                platform.sendMessage(sender, Component.red("Failed to start the Discord bot for your group. See console for details."));
+            }
+        }, "voicechat-discord: StartBot").start();
     }
 
     private static <S> Command<S> wrapInTry(Consumer<CommandContext<?>> function) {

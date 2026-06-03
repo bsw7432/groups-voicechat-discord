@@ -37,6 +37,10 @@ public final class GroupManager {
     // Queue join events for groups whose Discord channel is still being created
     public static final Map<UUID, List<JoinGroupEvent>> pendingJoinEvents = new HashMap<>();
 
+    // Track groups that currently have no Discord link. ConcrruentHashMap is used for thread safety,
+    // in lieu of more annoying alternatives.
+    public static final Map<UUID, bool> privateGroups = new ConcurrentHashMap<>();
+
     // Map groupId -> (player UUID -> (Discord user ID -> StaticAudioChannel))
     public static final Map<UUID, Map<UUID, Map<Long, StaticAudioChannel>>> groupAudioChannels = new ConcurrentHashMap<>();
 
@@ -341,7 +345,7 @@ public final class GroupManager {
         UUID previousDiscordGroup = null;
         for (Map.Entry<UUID, List<ServerPlayer>> entry : groupPlayerMap.entrySet()) {
             UUID otherGroupId = entry.getKey();
-            if (!otherGroupId.equals(groupId) && groupBotMap.containsKey(otherGroupId)) {
+            if (!otherGroupId.equals(groupId) && (groupBotMap.containsKey(otherGroupId) || privateGroups.containsKey(otherGroupId))) {
                 List<ServerPlayer> otherPlayers = entry.getValue();
                 if (otherPlayers.stream().anyMatch(p -> p.getUuid().equals(player.getUuid()))) {
                     previousDiscordGroup = otherGroupId;
@@ -352,7 +356,15 @@ public final class GroupManager {
         
         // Remove player from previous Discord group if they were in one
         if (previousDiscordGroup != null) {
-            removePlayerFromGroup(previousDiscordGroup, player.getUuid(), platform.getName(player));
+            if (privateGroups.containsKey(previousDiscordGroup)) {
+                // We still track players in private groups, in case that group later spins up a voicelink
+                List<ServerPlayer> players = groupPlayerMap.get(group.getId());
+                if (players != null) {
+                    players.removeIf(p -> p.getUuid().equals(player.getUuid()));
+                }
+            } else {
+                removePlayerFromGroup(previousDiscordGroup, player.getUuid(), platform.getName(player));
+            }
         }
         
         // If group is still pending Discord channel creation, queue the join event
@@ -365,6 +377,13 @@ public final class GroupManager {
         }
         // Only handle join if group is tracked in groupBotMap (i.e., is a Discord group)
         if (!groupBotMap.containsKey(groupId)) {
+
+            // We still track players in private groups, in case that group later spins up a voicelink
+            if (privateGroups.containsKey(groupId)) {
+                List<ServerPlayer> players = groupPlayerMap.putIfAbsent(group.getId(), new CopyOnWriteArrayList<>());
+                players.add(player);
+            }
+
             platform.debug("[onJoinGroup] Skipping group " + group.getName() + " (" + groupId + "): not in groupBotMap (not a Discord group)");
             return;
         }
@@ -420,6 +439,15 @@ public final class GroupManager {
 
         // Only handle leave if group is tracked in groupBotMap (i.e., is a Discord group)
         if (!groupBotMap.containsKey(group.getId())) {
+
+            // We still track players in private groups, in case that group later spins up a voicelink
+            if (privateGroups.containKey(group.getId())) {
+                List<ServerPlayer> players = groupPlayerMap.get(group.getId());
+                if (players != null) {
+                    players.removeIf(p -> p.getUuid().equals(player.getUuid()));
+                }
+            }
+
             platform.debug("[onLeaveGroup] Skipping group " + group.getName() + " (" + group.getId() + "): not in groupBotMap (not a Discord group)");
             return;
         }
@@ -439,17 +467,20 @@ public final class GroupManager {
             return;
         }
 
-        if (group.hasPassword()) {
-            platform.info("Not adding group " + group.getName() + " (" + groupId + ") to Discord: group has a password.");
-            return;
-        }
-
         VoicechatConnection connection = event.getConnection();
         if (connection == null) {
             platform.debug("someone created " + groupId + " (" + group.getName() + ")");
             return;
         }
         ServerPlayer player = connection.getPlayer();
+
+        // Password groups are opt-in to Discord
+        if (group.hasPassword()) {
+            platform.info("Not adding group " + group.getName() + " (" + groupId + ") to Discord: group has a password.");
+            privateGroups.put(groupId, true);
+            groupOwnerMap.put(groupId, player.getUuid());
+            return;
+        }
 
         // Track the owner of the group
         groupOwnerMap.put(groupId, player.getUuid());
@@ -471,7 +502,7 @@ public final class GroupManager {
             pendingGroupCreations.put(groupId, bot);
             new Thread(() -> {
                 if (bot.logIn()) {
-                    bot.createDiscordVoiceChannelAsync(group.getName(), discordChannelId -> {
+                    bot.createDiscordVoiceChannelAsync(group.getName(), false, discordChannelId -> {
                         if (discordChannelId == null) {
                             platform.error("Failed to create Discord voice channel for group " + group.getName() + " (" + groupId + ")");
                             return;
@@ -565,7 +596,6 @@ public final class GroupManager {
             }
         }
 
-        bot = groupBotMap.remove(groupId);
         if (bot != null) {
             platform.debug("onGroupRemoved: Stopping Discord bot for group: " + group.getName() + ")");
             if (permanent) {
@@ -590,6 +620,9 @@ public final class GroupManager {
         lastPlayerCounts.remove(groupId);
         if (permanent) {
             permanentGroupId = null;
+        }
+        if (privateGroups.containsKey(groupId)) {
+            privateGroups.remove(groupId);
         }
     }
 
@@ -633,4 +666,67 @@ public final class GroupManager {
             }
         }
     }
+
+    // TODO: Connect this to reduce dupe code
+    public static void spinUpDiscordLink(Group group, UUID groupId) {
+        DiscordBot found = findAvailableBot();
+        if (found == null) {
+            platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")! All bots are started or already assigned.\n" +
+                "Bot status: " + Core.bots.stream().map(b -> "started=" + b.isStarted() + ", assigned=" + groupBotMap.containsValue(b)).toList());
+            // Send a message to the player who created the group
+            Component message = Component.red("[Discord] ")
+                .append(Component.white("Unable to create Discord voice channel for group '"))
+                .append(Component.yellow(group.getName()))
+                .append(Component.white("'. No Discord bots are available."));
+            platform.sendMessage(player, message);
+            return;
+        }
+
+        DiscordBot bot = found;
+        pendingGroupCreations.put(groupId, bot);
+        new Thread(() -> {
+            if (bot.logIn()) {
+                bot.createDiscordVoiceChannelAsync(group.getName(), group.hasPassword(), discordChannelId -> {
+                    if (discordChannelId == null) {
+                        platform.error("Failed to create Discord voice channel for group " + group.getName() + " (" + groupId + ")");
+                        return;
+                    }
+
+                    bot.start();
+
+                    pendingGroupCreations.remove(groupId);
+                    synchronized (removedBeforeCreation) {
+                        if (removedBeforeCreation.contains(groupId)) {
+                            platform.debug("Group " + groupId + " (" + group.getName() + ") was removed before Discord channel creation finished. Deleting channel.");
+                            bot.deleteDiscordVoiceChannelAsync();
+                            removedBeforeCreation.remove(groupId);
+                            bot.stop();
+                            return;
+                        }
+                    }
+
+                    bot.startDiscordAudioThread(groupId);
+                    groupBotMap.put(groupId, bot);
+                    platform.debug("Linked groupId " + groupId + " (" + group.getName() + ") to bot (discordChannelId=" + discordChannelId + ")");
+
+                    platform.debug(player.getUuid() + " (" + platform.getName(player) + ") created " + groupId + " (" + group.getName() + ")");
+
+                    GroupManager.privateGroups.remove(groupId);
+
+                    List<ServerPlayer> players = getPlayers(group);
+                    int addedPlayer = 1;
+                    for (ServerPlayer player : players) {
+                        VoicechatConnection connection = Core.api.getConnectionOf(player.getUuid());
+                        handlePlayerJoin(group, player, connection, bot, addedPlayer++);
+                    }
+
+                    processQueuedJoinEvents(groupId, group);
+                });
+            } else {
+                platform.error("Failed to login to Discord for group " + group.getName() + " (" + groupId + ")");
+                pendingGroupCreations.remove(groupId);
+            }
+        }, "voicechat-discord: Bot AutoStart for Group").start();
+    }
+
 }

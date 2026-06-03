@@ -197,6 +197,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1createDisco
     _obj: jobject,
     ptr: jlong,
     group_name: JString<'_>,
+    is_private: jboolean,
 ) -> jlong {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let group_name: String = match env.get_string(&group_name) {
@@ -224,7 +225,8 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1createDisco
             drop(state);
             // Run async channel creation
             match crate::runtime::RUNTIME.block_on(async {
-                discord_bot.create_voice_channel(&http, &group_name).await
+                // Rust doesn't allow for direct int to bool casts, but this works the same for is_private
+                discord_bot.create_voice_channel(&http, &group_name, is_private != 0).await
             }) {
                 Ok(channel_id) => channel_id.get() as jlong,
                 Err(e) => {
