@@ -41,6 +41,7 @@ public final class GroupManager {
 
     // Track groups that currently have no Discord link. ConcrruentHashMap is used for thread safety,
     // in lieu of more annoying alternatives.
+    // TODO: Probably rename this something more accurate
     public static final Map<UUID, Boolean> privateGroups = new ConcurrentHashMap<>();
 
     // Map groupId -> (player UUID -> (Discord user ID -> StaticAudioChannel))
@@ -383,7 +384,10 @@ public final class GroupManager {
             // We still track players in private groups, in case that group later spins up a voicelink
             if (privateGroups.containsKey(groupId)) {
                 List<ServerPlayer> players = groupPlayerMap.putIfAbsent(group.getId(), new CopyOnWriteArrayList<>());
-                players.add(player);
+                boolean wasPresent = players.stream().anyMatch(serverPlayer -> serverPlayer.getUuid().equals(player.getUuid()));
+                if (!wasPresent) {
+                    players.add(player);
+                }
             }
 
             platform.debug("[onJoinGroup] Skipping group " + group.getName() + " (" + groupId + "): not in groupBotMap (not a Discord group)");
@@ -481,6 +485,8 @@ public final class GroupManager {
             platform.info("Not adding group " + group.getName() + " (" + groupId + ") to Discord: group has a password.");
             privateGroups.put(groupId, true);
             groupOwnerMap.put(groupId, player.getUuid());
+            List<ServerPlayer> players = getPlayers(group);
+            players.add(player);
             return;
         }
 
