@@ -41,7 +41,7 @@ public final class GroupManager {
 
     // Track groups that currently have no Discord link. ConcrruentHashMap is used for thread safety,
     // in lieu of more annoying alternatives.
-    public static final Map<UUID, bool> privateGroups = new ConcurrentHashMap<>();
+    public static final Map<UUID, Boolean> privateGroups = new ConcurrentHashMap<>();
 
     // Map groupId -> (player UUID -> (Discord user ID -> StaticAudioChannel))
     public static final Map<UUID, Map<UUID, Map<Long, StaticAudioChannel>>> groupAudioChannels = new ConcurrentHashMap<>();
@@ -443,7 +443,7 @@ public final class GroupManager {
         if (!groupBotMap.containsKey(group.getId())) {
 
             // We still track players in private groups, in case that group later spins up a voicelink
-            if (privateGroups.containKey(group.getId())) {
+            if (privateGroups.containsKey(group.getId())) {
                 List<ServerPlayer> players = groupPlayerMap.get(group.getId());
                 if (players != null) {
                     players.removeIf(p -> p.getUuid().equals(player.getUuid()));
@@ -670,9 +670,9 @@ public final class GroupManager {
     }
 
     // TODO: Connect this to reduce dupe code
-    public static void spinUpDiscordLink(Group group, UUID groupId) {
-        DiscordBot found = findAvailableBot();
-        if (found == null) {
+    public static void spinUpDiscordLink(Group group, UUID groupId, ServerPlayer player) {
+        DiscordBot bot = findAvailableBot();
+        if (bot == null) {
             platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")! All bots are started or already assigned.\n" +
                 "Bot status: " + Core.bots.stream().map(b -> "started=" + b.isStarted() + ", assigned=" + groupBotMap.containsValue(b)).toList());
             // Send a message to the player who created the group
@@ -684,7 +684,6 @@ public final class GroupManager {
             return;
         }
 
-        DiscordBot bot = found;
         pendingGroupCreations.put(groupId, bot);
         new Thread(() -> {
             if (bot.logIn()) {
@@ -715,11 +714,12 @@ public final class GroupManager {
 
                     GroupManager.privateGroups.remove(groupId);
 
+                    // TODO: Other flows aside from dvcgroup start may not have player in the list
                     List<ServerPlayer> players = getPlayers(group);
                     int addedPlayer = 1;
-                    for (ServerPlayer player : players) {
+                    for (ServerPlayer connectedPlayer : players) {
                         VoicechatConnection connection = Core.api.getConnectionOf(player.getUuid());
-                        handlePlayerJoin(group, player, connection, bot, addedPlayer++);
+                        handlePlayerJoin(group, connectedPlayer, connection, bot, addedPlayer++);
                     }
 
                     processQueuedJoinEvents(groupId, group);

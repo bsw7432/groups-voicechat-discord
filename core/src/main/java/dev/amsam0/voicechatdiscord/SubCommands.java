@@ -6,6 +6,7 @@ import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import de.maxhenkel.voicechat.api.Group;
 import de.maxhenkel.voicechat.api.ServerPlayer;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -175,7 +176,7 @@ public final class SubCommands {
                 } else {
                     bot.stop(); // Default: deletes the channel
                 }
-                GroupManager.privateGroups.put(groupId, true);
+                GroupManager.privateGroups.put(finalGroupId, true);
                 platform.sendMessage(sender, Component.green("Successfully stopped the Discord bot for your group."));
             } catch (Throwable e) {
                 platform.error("Failed to stop Discord bot for group: " + finalGroupId, e);
@@ -288,7 +289,7 @@ public final class SubCommands {
         // there is no VC, so, we should make one.
         if (bot == null) {
             Group group = Core.api.getGroup(groupId);
-            GroupManager.spinUpDiscordLink(group, groupId);
+            GroupManager.spinUpDiscordLink(group, groupId, player);
             return;
         }
 
