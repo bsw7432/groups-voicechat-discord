@@ -1,3 +1,5 @@
+//
+
 package dev.amsam0.voicechatdiscord;
 
 import de.maxhenkel.voicechat.api.Group;
