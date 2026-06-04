@@ -148,7 +148,7 @@ impl DiscordBot {
             // Removes ability for @everyone to speak, read message history, send messages, and connect 
             Some(
                 PermissionOverwrite{
-                    allow: Permissions::all(),
+                    allow: Permissions::empty(),
                     deny: Permissions::SPEAK | Permissions::CONNECT | Permissions::READ_MESSAGE_HISTORY | Permissions::SEND_MESSAGES,
                     kind: PermissionOverwriteType::Role(guild_id.everyone_role())
                 }
